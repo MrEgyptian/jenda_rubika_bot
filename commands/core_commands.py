@@ -33,6 +33,7 @@ HELP_TEXT = (
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 COOKIES_FILE = PROJECT_ROOT / "cookies.txt"
+MAX_VIDEO_DOWNLOAD_BYTES = 100 * 1024 * 1024
 
 
 def _extract_command_parts(message):
@@ -66,8 +67,15 @@ def _download_with_ytdlp(video_url, output_dir):
         "noplaylist": True,
         "quiet": True,
         "no_warnings": True,
-        "format": "mp4/bestvideo+bestaudio/best",
+        "format": (
+            "bestvideo[filesize<=100M]+bestaudio/best[filesize<=100M]/"
+            "bestvideo[filesize_approx<=100M]+bestaudio/best[filesize_approx<=100M]/"
+            "bestvideo[height<=720]+bestaudio/best[height<=720]/"
+            "bestvideo+bestaudio/best"
+        ),
+        "format_sort": ["filesize:asc", "res:asc", "br:asc"],
         "merge_output_format": "mp4",
+        "max_filesize": MAX_VIDEO_DOWNLOAD_BYTES,
     }
 
     if COOKIES_FILE.exists() and COOKIES_FILE.stat().st_size > 0:
@@ -82,6 +90,13 @@ def _download_with_ytdlp(video_url, output_dir):
             merged_path = final_path.with_suffix(".mp4")
             if merged_path.exists():
                 final_path = merged_path
+
+        if final_path.exists() and final_path.stat().st_size > MAX_VIDEO_DOWNLOAD_BYTES:
+            try:
+                final_path.unlink()
+            except Exception:
+                pass
+            raise ValueError("File is larger than 100MB")
 
     return info, final_path
 
@@ -190,6 +205,10 @@ def register(app):
             await message.reply("Download timed out. Please try a shorter video.")
             return
         except Exception as exc:
+            error_text = str(exc).lower()
+            if "max-filesize" in error_text or "larger than 100mb" in error_text:
+                await message.reply("Download blocked: maximum allowed video size is 100MB.")
+                return
             await message.reply(f"Download failed: {exc}")
             return
 
