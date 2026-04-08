@@ -95,7 +95,14 @@ def _download_audio_with_ytdlp(video_url, output_dir):
         "noplaylist": True,
         "quiet": True,
         "no_warnings": True,
-        "format": "bestaudio[ext=m4a]/bestaudio",
+        "format": "bestaudio/best",
+        "postprocessors": [
+            {
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": "mp3",
+                "preferredquality": "192",
+            }
+        ],
     }
 
     if COOKIES_FILE.exists() and COOKIES_FILE.stat().st_size > 0:
@@ -105,6 +112,10 @@ def _download_audio_with_ytdlp(video_url, output_dir):
         info = ydl.extract_info(video_url, download=True)
         file_path = ydl.prepare_filename(info)
         final_path = Path(file_path)
+
+        mp3_path = final_path.with_suffix(".mp3")
+        if mp3_path.exists():
+            final_path = mp3_path
 
     return info, final_path
 

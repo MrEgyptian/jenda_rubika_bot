@@ -108,7 +108,7 @@ async def _download_song_async(query_or_url, timeout=300):
 
 
 def register(app):
-	@app.on_update(filters.commands(["song", "songsearch"]))
+	@app.on_update(filters.commands(["song", "search",'yt_song','ytsearch','yt']))
 	async def song_search_command(client, message):
 		if yt_dlp is None:
 			await message.reply("yt-dlp is not installed. Install it with: pip install yt-dlp")
