@@ -1,0 +1,10 @@
+start - Welcome message and overview of the bot
+help - Instructions on how to use the bot
+download - Initiate the video download process
+supported_sources - List of supported video sources
+settings - Customize your experience (if applicable)
+favorites - Save your favorite videos for easy access
+history - View your download history
+contact - Get in touch for support or feedback
+faq - Frequently asked questions about the bot
+support - If you enjoy using @Fetchylilbot and want to help keep it running, consider making a donation! Every little bit helps and is greatly appreciated! 🌟
