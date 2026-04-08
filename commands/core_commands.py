@@ -123,6 +123,26 @@ async def _download_audio_with_ytdlp_async(video_url, output_dir, timeout=900):
     )
 
 
+async def _send_audio_with_fallback(message, file_path, title):
+    try:
+        await message.reply_music(str(file_path), text=f"Audio downloaded: {title}")
+        return
+    except Exception as exc:
+        print(f"reply_music failed: {exc}")
+
+    try:
+        await message.reply_file(str(file_path), text=f"Audio downloaded: {title}")
+        return
+    except Exception as exc:
+        print(f"reply_file fallback failed: {exc}")
+
+    await message.reply(
+        f"Audio downloaded: {title}\n"
+        f"Saved to: {file_path}\n"
+        "Upload failed on server side; you can still access the local file."
+    )
+
+
 def register(app):
     @app.on_update(filters.commands("help"))
     async def help_command(client, message):
@@ -171,7 +191,7 @@ def register(app):
                 "But the final file path could not be confirmed."
             )
 
-    @app.on_update(filters.commands("download_audio"))
+    @app.on_update(filters.commands(["download_audio",'audio','songdl','songdownload']))
     async def download_audio_command(client, message):
         if yt_dlp is None:
             await message.reply(
@@ -206,7 +226,7 @@ def register(app):
 
         title = info.get("title") or "audio"
         if file_path.exists():
-            await message.reply_music(str(file_path), text=f"Audio downloaded: {title}")
+            await _send_audio_with_fallback(message, file_path, title)
         else:
             await message.reply(
                 f"Audio download completed for: {title}\n"
