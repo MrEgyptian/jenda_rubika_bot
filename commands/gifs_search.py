@@ -33,6 +33,22 @@ def _extract_query(message):
     return parts[1].strip()
 
 
+async def _safe_edit(message, text):
+    edit = getattr(message, "edit", None)
+    if callable(edit):
+        return await edit(text)
+
+    edit_text = getattr(message, "edit_text", None)
+    if callable(edit_text):
+        return await edit_text(text)
+
+    reply = getattr(message, "reply", None)
+    if callable(reply):
+        return await reply(text)
+
+    return None
+
+
 def _build_search_urls(query):
     encoded_query = quote_plus(query)
     return [template.format(query=encoded_query) for template in GIF_SEARCH_URLS]
@@ -138,26 +154,26 @@ def register(app):
             await message.reply("Usage: /gifs <query>")
             return
 
-        await message.edit("Searching for GIFs with yt-dlp...")
+        await _safe_edit(message, "Searching for GIFs with yt-dlp...")
 
         try:
             gifs = await _search_gifs_async(query, limit=5)
             if not gifs:
-                await message.edit("No GIFs found.")
+                await _safe_edit(message, "No GIFs found.")
                 return
 
             gif = gifs[0]
             file_path = await _download_gif_async(gif["url"])
             if file_path:
                 await message.reply_file(file_path, caption=gif["title"])
-                await message.edit("GIF sent.")
+                await _safe_edit(message, "GIF sent.")
                 return
 
             lines = [f"{idx}. {item['title']}" for idx, item in enumerate(gifs, start=1)]
             lines.append("")
             lines.append("Search found results, but sending failed.")
-            await message.edit("\n".join(lines))
+            await _safe_edit(message, "\n".join(lines))
         except asyncio.TimeoutError:
-            await message.edit("Search timed out.")
+            await _safe_edit(message, "Search timed out.")
         except Exception as exc:
-            await message.edit(f"Error: {exc}")
+            await _safe_edit(message, f"Error: {exc}")

@@ -6,6 +6,8 @@ import aiohttp
 from rubpy.bot import BotClient
 import asyncio
 
+import helpers.client  # noqa: F401 - installs edit aliases on Rubpy message types
+
 config = ConfigParser()
 config.read("config.ini")
 import aiohttp
