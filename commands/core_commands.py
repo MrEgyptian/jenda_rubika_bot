@@ -1,5 +1,7 @@
 from rubpy.bot import filters
 import asyncio
+import shutil
+import subprocess
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -33,7 +35,7 @@ HELP_TEXT = (
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 COOKIES_FILE = PROJECT_ROOT / "cookies.txt"
-MAX_VIDEO_DOWNLOAD_BYTES = 100 * 1024 * 1024
+MAX_UPLOAD_PART_SIZE = 30 * 1024 * 1024
 
 
 def _extract_command_parts(message):
@@ -58,6 +60,157 @@ def _is_valid_url(value):
     return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
 
+def _split_file_into_parts(file_path, max_part_size=MAX_UPLOAD_PART_SIZE):
+    file_path = Path(file_path)
+    if file_path.stat().st_size <= max_part_size:
+        return [file_path]
+
+    if shutil.which("ffmpeg"):
+        parts = _split_file_with_ffmpeg(file_path, max_part_size)
+        if len(parts) > 1:
+            return parts
+
+    return _split_file_by_bytes(file_path, max_part_size)
+
+
+def _split_file_by_bytes(file_path, max_part_size=MAX_UPLOAD_PART_SIZE):
+    file_path = Path(file_path)
+    file_size = file_path.stat().st_size
+    if file_size <= max_part_size:
+        return [file_path]
+
+    parts_dir = file_path.parent / f"{file_path.stem}_parts"
+    parts_dir.mkdir(parents=True, exist_ok=True)
+
+    part_paths = []
+    with file_path.open("rb") as source:
+        part_number = 1
+        while True:
+            chunk = source.read(max_part_size)
+            if not chunk:
+                break
+
+            part_path = parts_dir / f"{file_path.stem}.part{part_number:03d}{file_path.suffix}"
+            with part_path.open("wb") as part_file:
+                part_file.write(chunk)
+
+            part_paths.append(part_path)
+            part_number += 1
+
+    return part_paths
+
+
+def _probe_duration_seconds(file_path):
+    if not shutil.which("ffprobe"):
+        return None
+
+    cmd = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        str(file_path),
+    ]
+
+    try:
+        output = subprocess.check_output(cmd, text=True).strip()
+        duration = float(output)
+        if duration > 0:
+            return duration
+    except Exception:
+        return None
+
+    return None
+
+
+def _split_file_with_ffmpeg(file_path, max_part_size=MAX_UPLOAD_PART_SIZE):
+    file_path = Path(file_path)
+    file_size = file_path.stat().st_size
+    if file_size <= max_part_size:
+        return [file_path]
+
+    duration = _probe_duration_seconds(file_path)
+    if not duration:
+        return [file_path]
+
+    # Estimate segment time to target part size using average bytes per second.
+    estimated_segment_time = max(1, int(duration * (max_part_size / file_size)))
+
+    parts_dir = file_path.parent / f"{file_path.stem}_parts"
+    parts_dir.mkdir(parents=True, exist_ok=True)
+    output_pattern = parts_dir / f"{file_path.stem}.part%03d{file_path.suffix}"
+
+    cmd = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        str(file_path),
+        "-map",
+        "0",
+        "-c",
+        "copy",
+        "-f",
+        "segment",
+        "-segment_time",
+        str(estimated_segment_time),
+        "-reset_timestamps",
+        "1",
+        str(output_pattern),
+    ]
+
+    try:
+        subprocess.run(cmd, check=True)
+    except Exception:
+        return [file_path]
+
+    part_paths = sorted(parts_dir.glob(f"{file_path.stem}.part*{file_path.suffix}"))
+    if len(part_paths) > 1:
+        return part_paths
+
+    return [file_path]
+
+
+def _cleanup_paths(paths):
+    for path in paths:
+        try:
+            Path(path).unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
+async def _send_file_with_split(message, file_path, title, kind="video"):
+    file_path = Path(file_path)
+    part_paths = _split_file_into_parts(file_path)
+
+    if len(part_paths) == 1:
+        single_part = part_paths[0]
+        if kind == "video":
+            await _send_video_with_fallback(message, single_part, title)
+            return
+        if kind == "music":
+            await _send_audio_with_fallback(message, single_part, title)
+            return
+
+        await message.reply_video(str(single_part), text=f"Download completed: {title}")
+        return
+
+    try:
+        for index, part_path in enumerate(part_paths, start=1):
+            caption = f"{title} - part {index}/{len(part_paths)}"
+            print(f"Sending part {index}/{len(part_paths)}: {part_path}")
+            try:
+                await message.reply_video(str(part_path), text=caption)
+            except Exception as exc:
+                print(f"Failed to send part {index}: {exc}")
+    finally:
+        _cleanup_paths(part_paths)
+
+
 def _download_with_ytdlp(video_url, output_dir):
     output_dir.mkdir(parents=True, exist_ok=True)
     output_template = str(output_dir / "%(title).120s-%(id)s.%(ext)s")
@@ -67,15 +220,8 @@ def _download_with_ytdlp(video_url, output_dir):
         "noplaylist": True,
         "quiet": True,
         "no_warnings": True,
-        "format": (
-            "bestvideo[filesize<=100M]+bestaudio/best[filesize<=100M]/"
-            "bestvideo[filesize_approx<=100M]+bestaudio/best[filesize_approx<=100M]/"
-            "bestvideo[height<=720]+bestaudio/best[height<=720]/"
-            "bestvideo+bestaudio/best"
-        ),
-        "format_sort": ["filesize:asc", "res:asc", "br:asc"],
+        "format": "mp4/bestvideo+bestaudio/best",
         "merge_output_format": "mp4",
-        "max_filesize": MAX_VIDEO_DOWNLOAD_BYTES,
     }
 
     if COOKIES_FILE.exists() and COOKIES_FILE.stat().st_size > 0:
@@ -90,13 +236,6 @@ def _download_with_ytdlp(video_url, output_dir):
             merged_path = final_path.with_suffix(".mp4")
             if merged_path.exists():
                 final_path = merged_path
-
-        if final_path.exists() and final_path.stat().st_size > MAX_VIDEO_DOWNLOAD_BYTES:
-            try:
-                final_path.unlink()
-            except Exception:
-                pass
-            raise ValueError("File is larger than 100MB")
 
     return info, final_path
 
@@ -169,6 +308,26 @@ async def _send_audio_with_fallback(message, file_path, title):
     )
 
 
+async def _send_video_with_fallback(message, file_path, title):
+    try:
+        await message.reply_video(str(file_path), text=f"Download completed: {title}")
+        return
+    except Exception as exc:
+        print(f"reply_video failed: {exc}")
+
+    try:
+        await message.reply_video(str(file_path), text=f"Download completed: {title}")
+        return
+    except Exception as exc:
+        print(f"reply_video fallback failed: {exc}")
+
+    await message.reply(
+        f"Download completed: {title}\n"
+        f"Saved to: {file_path}\n"
+        "Upload failed on server side; you can still access the local file."
+    )
+
+
 def register(app):
     @app.on_update(filters.commands("help"))
     async def help_command(client, message):
@@ -205,16 +364,12 @@ def register(app):
             await message.reply("Download timed out. Please try a shorter video.")
             return
         except Exception as exc:
-            error_text = str(exc).lower()
-            if "max-filesize" in error_text or "larger than 100mb" in error_text:
-                await message.reply("Download blocked: maximum allowed video size is 100MB.")
-                return
             await message.reply(f"Download failed: {exc}")
             return
 
         title = info.get("title") or "video"
         if file_path.exists():
-            await message.reply_video(str(file_path), text=f"Download completed: {title}")
+            await _send_file_with_split(message, file_path, title, kind="video")
         else:
             await message.reply(
                 f"Download completed for: {title}\n"
@@ -256,7 +411,7 @@ def register(app):
 
         title = info.get("title") or "audio"
         if file_path.exists():
-            await _send_audio_with_fallback(message, file_path, title)
+            await _send_file_with_split(message, file_path, title, kind="music")
         else:
             await message.reply(
                 f"Audio download completed for: {title}\n"
