@@ -154,7 +154,7 @@ def register(app):
             await message.reply("Usage: /gifs <query>")
             return
 
-        await _safe_edit(message, "Searching for GIFs with yt-dlp...")
+            await _safe_edit(message, "Searching for GIFs with yt-dlp...")
 
         try:
             gifs = await _search_gifs_async(query, limit=5)
