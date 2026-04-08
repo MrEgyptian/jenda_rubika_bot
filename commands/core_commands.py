@@ -14,6 +14,7 @@ HELP_TEXT = (
     "/start - Welcome message and overview of the bot\n"
     "/help - Instructions on how to use the bot\n"
     "/download - Initiate the video download process\n"
+    "/download_audio - Download audio from a video URL\n"
     "/song <name> - Search YouTube music\n"
     "/songdl <url or name> - Download a song\n"
     "/supported_sources - List of supported video sources\n"
@@ -85,9 +86,39 @@ def _download_with_ytdlp(video_url, output_dir):
     return info, final_path
 
 
+def _download_audio_with_ytdlp(video_url, output_dir):
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_template = str(output_dir / "%(title).120s-%(id)s.%(ext)s")
+
+    options = {
+        "outtmpl": output_template,
+        "noplaylist": True,
+        "quiet": True,
+        "no_warnings": True,
+        "format": "bestaudio[ext=m4a]/bestaudio",
+    }
+
+    if COOKIES_FILE.exists() and COOKIES_FILE.stat().st_size > 0:
+        options["cookiefile"] = str(COOKIES_FILE)
+
+    with yt_dlp.YoutubeDL(options) as ydl:
+        info = ydl.extract_info(video_url, download=True)
+        file_path = ydl.prepare_filename(info)
+        final_path = Path(file_path)
+
+    return info, final_path
+
+
 async def _download_with_ytdlp_async(video_url, output_dir, timeout=900):
     return await asyncio.wait_for(
         asyncio.to_thread(_download_with_ytdlp, video_url, output_dir),
+        timeout=timeout,
+    )
+
+
+async def _download_audio_with_ytdlp_async(video_url, output_dir, timeout=900):
+    return await asyncio.wait_for(
+        asyncio.to_thread(_download_audio_with_ytdlp, video_url, output_dir),
         timeout=timeout,
     )
 
@@ -137,6 +168,48 @@ def register(app):
         else:
             await message.reply(
                 f"Download completed for: {title}\n"
+                "But the final file path could not be confirmed."
+            )
+
+    @app.on_update(filters.commands("download_audio"))
+    async def download_audio_command(client, message):
+        if yt_dlp is None:
+            await message.reply(
+                "yt-dlp is not installed. Install it with: pip install yt-dlp"
+            )
+            return
+
+        parts = _extract_command_parts(message)
+        if not parts or len(parts) < 2:
+            await message.reply("Usage: /download_audio <video_url>")
+            return
+
+        video_url = parts[1].strip()
+        if not _is_valid_url(video_url):
+            await message.reply("Please send a valid URL starting with http:// or https://")
+            return
+
+        await message.reply("Downloading audio, please wait...")
+
+        output_dir = Path(__file__).resolve().parents[1] / "downloads" / "audio"
+        try:
+            info, file_path = await _download_audio_with_ytdlp_async(
+                video_url,
+                output_dir,
+            )
+        except asyncio.TimeoutError:
+            await message.reply("Download timed out. Please try a shorter video.")
+            return
+        except Exception as exc:
+            await message.reply(f"Audio download failed: {exc}")
+            return
+
+        title = info.get("title") or "audio"
+        if file_path.exists():
+            await message.reply_music(str(file_path), text=f"Audio downloaded: {title}")
+        else:
+            await message.reply(
+                f"Audio download completed for: {title}\n"
                 "But the final file path could not be confirmed."
             )
 
