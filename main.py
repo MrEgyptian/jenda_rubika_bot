@@ -1,12 +1,23 @@
 from configparser import ConfigParser
 from importlib import import_module
 from pathlib import Path
+
+import aiohttp
 from rubpy.bot import BotClient
 import asyncio
 
 config = ConfigParser()
 config.read("config.ini")
+import aiohttp
+import ssl
 
+old_init = aiohttp.TCPConnector.__init__
+
+def new_init(self, *args, **kwargs):
+    kwargs["ssl"] = False
+    old_init(self, *args, **kwargs)
+
+aiohttp.TCPConnector.__init__ = new_init
 app = BotClient(config.get("bot", "token"))
 
 owners_value = config.get("bot", "owners", fallback="")

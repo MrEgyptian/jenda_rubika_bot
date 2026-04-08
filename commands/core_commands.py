@@ -14,6 +14,8 @@ HELP_TEXT = (
     "/start - Welcome message and overview of the bot\n"
     "/help - Instructions on how to use the bot\n"
     "/download - Initiate the video download process\n"
+    "/song <name> - Search YouTube music\n"
+    "/songdl <url or name> - Download a song\n"
     "/supported_sources - List of supported video sources\n"
     "/settings - Customize your experience (if applicable)\n"
     "\nFavorites:\n"
